@@ -1,0 +1,352 @@
+---
+title: "imerim analysis"
+author: "Nick R. Bachelder"
+date: "9/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(haven)
+library(xlsx)
+library(purrr)
+library(readxl)
+library(here)
+setwd(here())
+```
+
+
+## pull data
+
+```{r}
+filenames <- list.files(paste(here(), "/aft25"), pattern="*.sas7bdat", full.names=TRUE)
+ldf <- lapply(filenames, read_sas)
+
+
+ldf
+```
+
+## merge data. This is messy but can be subsetted well.
+
+```{r}
+final_df <- data.frame(ldf[[1]])
+i = 1
+for (index in 2:length(ldf)) {
+  merge_df <- data.frame(ldf[[index]])
+  merge_columns <- intersect(colnames(final_df), colnames(merge_df))
+  if (length(merge_columns) == 0) {
+    next
+  }
+  final_df <- merge(final_df, merge_df, all = T, by = merge_columns)
+  print(paste('Dataframe', i, 'done out of', length(ldf)))
+  i = i + 1
+}
+```
+
+## this is a list of relevant useful pages to subset master df
+
+```{r}
+unique(final_df$DataPageName)
+```
+
+Here find Race, Ethnicity, 
+
+# get demographics
+```{r}
+registration <- final_df %>% filter(DataPageName == "Subject Enrollment" )
+registration <- registration[colSums(!is.na(registration)) > 0] %>% select(subjectId, DATE_ON) %>% rename(enrolled_on = DATE_ON)
+
+registration
+```
+
+# get regestration
+```{r}
+demo <- final_df %>% filter(DataPageName == 'Demographics')
+demo <- demo[colSums(!is.na(demo)) > 0]
+demo <- demo %>% select(subjectId, RACE, ETHNICITY)
+
+demo
+```
+
+
+
+
+# get on-study
+```{r}
+### HPTUSEYN is history of hormone replacement thearapy, DCISLAT is laterality, 
+
+onstudy <- final_df %>% filter(DataPageName == "On-Study")
+onstudy <- onstudy[colSums(!is.na(onstudy)) > 0]
+onstudy <- onstudy %>% select(subjectId, DCISLAT, HPTUSEYN, HPTLASTDT, HTUSECUR, MENOSTATRAND, HEIGHT, WEIGHT, ECOGPSBSL) %>% rename(lat = DCISLAT, hist_hormone_repl = HPTUSEYN, 
+                                                                                                               dt_last_hormone_repl = HPTLASTDT, meno = MENOSTATRAND
+                                                                                                               , ECOG = ECOGPSBSL, curr_hormone_rep = HTUSECUR)
+
+onstudy
+```
+
+
+
+# get on-study left breast
+```{r}
+### ER is er status (positive if over 10%.)
+
+onstudy_left <- final_df %>% filter(DataPageName == "On-Study: DCIS Disease Status (Left Breast)")
+onstudy_left <- onstudy_left[colSums(!is.na(onstudy_left)) > 0]
+onstudy_left <- onstudy_left %>% select(subjectId, ER, PGR) %>% rename(ER_left = ER, PGR_left = PGR)
+
+onstudy_left
+```
+
+
+# get on-study right breast
+```{r}
+### HPTUSEYN is history of hormone replacement thearapy, DCISLAT is laterality, 
+
+onstudy_right <- final_df %>% filter(DataPageName == "On-Study: DCIS Disease Status (Right Breast)")
+onstudy_right <- onstudy_right[colSums(!is.na(onstudy_right)) > 0]
+onstudy_right <- onstudy_right %>% select(subjectId, ER, PGR) %>% rename(ER_right = ER, PGR_right = PGR)
+
+onstudy_right
+```
+
+
+
+# get prior surgery
+```{r}
+priorsurg <- final_df %>% filter(DataPageName == 'Summary of Prior DCIS Surgeries')
+priorsurg <- priorsurg[colSums(!is.na(priorsurg)) > 0]
+priorsurg <- priorsurg %>% mutate(prior_surg = ifelse(is.na(SURG_DT), 0, 1)) %>% select(subjectId, prior_surg, SURG_DT) %>% rename(prior_surg_dt = SURG_DT)
+
+priorsurg
+```
+
+
+
+# get surgery
+```{r}
+surg <- final_df %>% filter(DataPageName == 'Surgical Summary') %>% select(subjectId, SURG_DT, SURGTYP, SURGLAT,DCISDZEXTENT,DCISWIDTH, ER, PGR,
+                                                                           IHCHER2STAT, SLNDYN, SLNDTOTALN, SLNDPOSN, ALNDYN, ALNDAXILN, ALNDPOSN,
+                                                                           NUMADDSURGREQ)
+surg <- surg[colSums(!is.na(surg)) > 0]
+surg1 <- surg %>% group_by(subjectId) %>% filter(SURG_DT == min(SURG_DT)) ## get each  patients first surgery
+surg_count <- surg %>% group_by(subjectId) %>% count() %>% rename(surjery_count = n) ## count patient surgeries
+
+surg_first <- merge(surg1, surg_count, by = 'subjectId', all = T) %>% mutate(multiple_surg = surjery_count > 1) %>% rename(surg_dt = SURG_DT,
+                                                                                                                           surg_type = SURGTYP,
+                                                                                                                           surg_lat = SURGLAT,
+                                                                                                                           dcis_extent = DCISDZEXTENT,
+                                                                                                                           dcis_margin = DCISWIDTH,
+                                                                                                                           surg_er_status = ER,
+                                                                                                                           surg_pgr_status = PGR,
+                                                                                                                           surg_her2_status =
+                                                                                                                             IHCHER2STAT,
+                                                                                                                           sent_node_preform = SLNDYN,
+                                                                                                                           sent_node_disect =
+                                                                                                                             SLNDTOTALN,
+                                                                                                                           pos_sent_node = SLNDPOSN,
+                                                                                                                           axi_lymph_preform = 
+                                                                                                                             ALNDYN,
+                                                                                                                           axi_lymph_disect = 
+                                                                                                                             ALNDAXILN,
+                                                                                                                           pos_axi_lymph = 
+                                                                                                                             ALNDPOSN,
+                                                                                                                           additional_surg =
+                                                                                                                             NUMADDSURGREQ)
+surg_first
+```
+
+
+
+# get randomizations
+```{r}
+randomize <- final_df %>% filter(DataPageName == 'Randomization')
+randomize <- randomize[colSums(!is.na(randomize)) > 0]
+randomize <- randomize %>% select(subjectId, REGIME_NAME_DRV, DCISAGE, MICROCALC, GRADE) %>% rename(DCIS_margin = MICROCALC, DCIS_age = DCISAGE, DCIS_grade = GRADE, randomization_orig = REGIME_NAME_DRV)
+
+randomize
+```
+
+
+
+# get assignment switches
+```{r}
+### SURGOPT means switched from AM to Surg and DECLNALLOCARM means switched from surgery to AM
+
+switch <- final_df %>% filter(DataPageName == 'Change In Treatment/Management Approach (Including Allocation Refusal)')
+switch <- switch[colSums(!is.na(switch)) > 0]
+switch <- switch %>% mutate(switch_type = dplyr::case_when(SURGOPT == 'Yes' & DECLNALLOCARM == 'Yes' ~ 'Both',
+                                          SURGOPT == 'Yes' & DECLNALLOCARM == '' ~ 'AM-->Surgery',
+                                          SURGOPT == '' & DECLNALLOCARM == 'Yes' ~ 'Surgery-->AM',
+                                          TRUE ~ 'NA')) %>%
+  mutate(switch_type = na_if(switch_type, "NA"), switch = ifelse(is.na(switch_type), 0, 1),
+         switch_date = ifelse(switch_type == 'AM-->Surgery', DCLNAMDT, DCLNTXRECMDT)) %>% select(subjectId, SURGOPT, DECLNALLOCARM, DCISCHNGE,  DCISNEW, switch_type, switch_date) %>%
+  mutate(switch_date = as.POSIXct(switch_date, origin = "1970-01-01")) %>% rename(denied_AM_to_surg = SURGOPT,
+                                                                                  denied_surg_to_AM = DECLNALLOCARM,
+                                                                                  change_in_DCIS_reason_for_change = DCISCHNGE,
+                                                                                  new_DCIS_reason_for_change = DCISNEW) %>% unique()
+
+switch %>% filter(subjectId == 1356867)
+```
+
+
+
+Get needle biopsy
+```{r}
+biopsy <- final_df %>% filter(DataPageName == "Needle Biopsy")
+biopsy <- biopsy[colSums(!is.na(biopsy)) > 0]
+biopsy <- biopsy %>% select(subjectId, BIOPSYNDTXX, BREASTLATXX, ER, PGR, HER2STAT) %>% rename(biopsy_date = BIOPSYNDTXX, biopsy_lat = BREASTLATXX,
+                                                                                    biopsy_er_status = ER, biopsy_pgr_status = PGR,
+                                                                                    biopsy_her2_status = HER2STAT) %>% unique() 
+biopsy 
+
+```
+
+
+Get thearapy treatment
+
+```{r}
+endocrine <- final_df %>% filter(DataPageName == 'Endocrine Therapy Treatment')
+endocrine <- endocrine[colSums(!is.na(endocrine)) > 0] %>% select(subjectId, FRSTDOSEDURTX, LASTDOSEDURTX)
+endocrine_yn <- unique(endocrine$subjectId)
+
+endocrine ## dates are very inconsistant (discuss w terry)
+```
+
+
+get "Consent Withdrawal:  All Follow-Up"
+
+```{r}
+withdrawl <- final_df %>% filter(DataPageName == "End of Study (Study Withdrawal)")
+withdrawl <- withdrawl[colSums(!is.na(withdrawl)) > 0]
+
+withdrawl <- withdrawl %>% select(subjectId, ENDATDTHONSTUDY, ENDATCOM, ENDATFLLWCMPLT) %>% rename(withdraw_at_death = ENDATDTHONSTUDY, withdraw_w_FUP_comp = ENDATFLLWCMPLT,withdraw_reason_full = ENDATCOM)
+
+withdrawl
+```
+
+
+try to find invasive status updates
+
+"Patient Status"  = NO 
+"Adverse Events: Other" = NO
+"Deviations"= NO
+"Recurrence, New Primary Breast Cancer, or DCIS"  
+"Supporting Documentation: Recurrence, New Primary Breast Cancer, or DCIS"
+
+IS THIS THE RIGHT DATE? SEEMS ODD THERES ONLY 46
+
+```{r}
+## invasive from recurrence folder
+
+invasive_am <- final_df %>% filter(DataPageName == "Recurrence, New Primary Breast Cancer, or DCIS" ) 
+invasive_am <- invasive_am[colSums(!is.na(invasive_am)) > 0] %>% select(subjectId, NEWMALIGDIAGDTXX) %>% rename(invasive_date = NEWMALIGDIAGDTXX) %>% mutate(from = 'am')
+
+invasive_am
+
+## invasive for surgery
+
+invasive_surg <- final_df %>% filter(DataPageName == 'Surgical Summary') %>% select(subjectId, SURG_DT, INVASIVETUMOR)
+invasive_surg <- invasive_surg[colSums(!is.na(invasive_surg)) > 0] %>% filter(INVASIVETUMOR == 'Yes') %>% rename(invasive_date = SURG_DT) %>% select(-INVASIVETUMOR) %>% mutate(from = 'surg')
+
+
+invasive <- rbind(invasive_surg, invasive_am) %>% group_by(subjectId) %>% mutate(invasive_date = first(invasive_date, 
+                                                                                           order_by = invasive_date)) %>% select(-from) %>% unique() ## choose first invasive date
+
+```
+
+
+### MERGE ALL THE VARIABLES TO MAKE COMPREHENSIVE DF
+
+```{r}
+merge_variables <- list(demo, registration, onstudy, onstudy_left, onstudy_right, priorsurg, surg_first, randomize, switch, biopsy, endocrine, withdrawl, invasive)
+merge_fun <- function(x, y) {merge(x, y, by ='subjectId', all = T)}
+
+full_df <- merge_variables %>% reduce(merge_fun) 
+```
+
+## THEN CLEAN EVERYTHING, CALCULATE TIME VALUES NECCECARY
+
+
+## collapse into one row per patient with lists of variables
+
+```{r}
+library(lubridate)
+
+sting_unique <- function(x) {toString(na.omit(unique(x)))}
+
+full_df <- full_df %>%
+    group_by(subjectId) %>% 
+    summarise_each(funs(sting_unique)) 
+
+full_df <- full_df %>% mutate(invasive_date = as.Date(invasive_date, format =  "%Y-%m-%d"), multiple_switch = ifelse(grepl( ',', switch_type, fixed = TRUE), 1, 0),
+                              endorcine_therapy = ifelse(subjectId %in% endocrine_yn, 1, 0), enrolled_on = as.Date(enrolled_on, format =  "%Y-%m-%d"), 
+                              time_to_invasive = invasive_date - enrolled_on) 
+
+full_df
+```
+
+
+
+```{r}
+write.csv(full_df, 'COMET_patient_summary.csv')
+write.xlsx(full_df, 'COMET_patient_summary.xlsx')
+```
+
+
+
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+
+
